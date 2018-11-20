@@ -63,13 +63,7 @@ class ActivityEmail(object):
         ))
 
     def get_group_link(self):
-        return absolute_uri(
-            u'/{}/{}/issues/{}/'.format(
-                self.organization.slug,
-                self.project.slug,
-                self.group.id,
-            )
-        )
+        return self.group.get_absolute_url(params={'referrer': 'activity_email'})
 
     def get_base_context(self):
         activity = self.activity
