@@ -110,6 +110,7 @@ export default function getConfiguration({project}) {
         ...plugins.map(plugin => ({
           path: `${pathPrefix}/plugins/${plugin.id}/`,
           title: plugin.name,
+          show: ({access}) => access.has('project:write'),
         })),
       ],
     },

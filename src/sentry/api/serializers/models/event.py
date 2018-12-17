@@ -8,6 +8,7 @@ from semaphore import meta_with_chunks
 
 from sentry.api.serializers import Serializer, register, serialize
 from sentry.models import Event, EventError, EventAttachment
+from sentry.utils.safe import get_path
 
 
 CRASH_FILE_TYPES = set(['event.minidump'])
@@ -85,13 +86,13 @@ class EventSerializer(Serializer):
         return (data, meta_with_chunks(data, api_meta))
 
     def _get_tags_with_meta(self, event):
-        meta = (event.data.get('_meta') or {}).get('tags') or {}
+        meta = get_path(event.data, '_meta', 'tags') or {}
 
         tags = sorted(
             [{
                 'key': k.split('sentry:', 1)[-1],
                 'value': v,
-                '_meta': meta.get(k) or meta.get(six.text_type(i), {}).get('1') or None,
+                '_meta': meta.get(k) or get_path(meta, six.text_type(i), '1') or None,
             } for i, (k, v) in enumerate(event.data.get('tags') or ())],
             key=lambda x: x['key']
         )
@@ -105,21 +106,22 @@ class EventSerializer(Serializer):
 
     def _get_attr_with_meta(self, event, attr, default=None):
         value = event.data.get(attr, default)
-        meta = (event.data.get('_meta') or {}).get(attr)
+        meta = get_path(event.data, '_meta', attr)
         return (value, meta_with_chunks(value, meta))
 
-    def _get_message_with_meta(self, event):
-        meta = event.data.get('_meta') or {}
+    def _get_legacy_message_with_meta(self, event):
+        meta = event.data.get('_meta')
 
-        if 'logentry' not in event.data:
+        message = get_path(event.data, 'logentry', 'formatted')
+        msg_meta = get_path(meta, 'logentry', 'formatted')
+
+        if not message:
+            message = get_path(event.data, 'logentry', 'message')
+            msg_meta = get_path(meta, 'logentry', 'message')
+
+        if not message:
             message = event.message
-            msg_meta = meta.get('message')
-        elif 'formatted' in event.data['logentry']:
-            message = event.data['logentry']['formatted']
-            msg_meta = meta.get('logentry', {}).get('formatted')
-        else:
-            message = event.data['logentry']['message']
-            msg_meta = meta.get('logentry', {}).get('message')
+            msg_meta = None
 
         return (message, meta_with_chunks(message, msg_meta))
 
@@ -154,17 +156,12 @@ class EventSerializer(Serializer):
         return results
 
     def serialize(self, obj, attrs, user):
-        errors = []
-        for error in obj.data.get('errors', []):
-            message = EventError.get_message(error)
-            error_result = {
-                'type': error['type'],
-                'message': message,
-                'data': {k: v for k, v in six.iteritems(error) if k != 'type'},
-            }
-            errors.append(error_result)
+        errors = [
+            EventError(error).get_api_context() for error
+            in get_path(obj.data, 'errors', filter=True, default=())
+        ]
 
-        (message, message_meta) = self._get_message_with_meta(obj)
+        (message, message_meta) = self._get_legacy_message_with_meta(obj)
         (tags, tags_meta) = self._get_tags_with_meta(obj)
         (context, context_meta) = self._get_attr_with_meta(obj, 'extra', {})
         (packages, packages_meta) = self._get_attr_with_meta(obj, 'modules', {})
@@ -179,11 +176,6 @@ class EventSerializer(Serializer):
                 )
             except TypeError:
                 received = None
-
-        from sentry.event_manager import (
-            get_hashes_from_fingerprint,
-            md5_from_hash,
-        )
 
         # TODO(dcramer): move release serialization here
         d = {
@@ -209,10 +201,7 @@ class EventSerializer(Serializer):
             'dateCreated': obj.datetime,
             'dateReceived': received,
             'errors': errors,
-            'fingerprints': [
-                md5_from_hash(h)
-                for h in get_hashes_from_fingerprint(obj, obj.data.get('fingerprint', ['{{ default }}']))
-            ],
+            'fingerprints': obj.get_hashes(),
             '_meta': {
                 'entries': attrs['_meta']['entries'],
                 'message': message_meta,

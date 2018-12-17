@@ -1,22 +1,23 @@
 import PropTypes from 'prop-types';
 import React from 'react';
 import moment from 'moment';
-import {Box} from 'grid-emotion';
 import {browserHistory} from 'react-router';
 
 import {addErrorMessage, addSuccessMessage} from 'app/actionCreators/indicator';
 import {getUtcDateString} from 'app/utils/dates';
+import {updateProjects, updateDateTime} from 'app/actionCreators/globalSelection';
 import {t, tct} from 'app/locale';
+
 import HeaderItemPosition from 'app/components/organizations/headerItemPosition';
 import HeaderSeparator from 'app/components/organizations/headerSeparator';
 import MultipleProjectSelector from 'app/components/organizations/multipleProjectSelector';
 import SentryTypes from 'app/sentryTypes';
 import TimeRangeSelector from 'app/components/organizations/timeRangeSelector';
+import BetaTag from 'app/components/betaTag';
 
 import Result from './result';
 import ResultLoading from './result/loading';
 import Intro from './intro';
-import EarlyAdopterMessage from './earlyAdopterMessage';
 import NewQuery from './sidebar/newQuery';
 import EditSavedQuery from './sidebar/editSavedQuery';
 import SavedQueryList from './sidebar/savedQueryList';
@@ -36,6 +37,7 @@ import {
   DiscoverHeader,
   Body,
   BodyContent,
+  HeadingContainer,
   Heading,
   Sidebar,
   SidebarTabs,
@@ -77,7 +79,13 @@ export default class OrganizationDiscover extends React.Component {
   }
 
   componentWillReceiveProps(nextProps) {
-    const {queryBuilder, location: {search}, savedQuery, isEditingSavedQuery} = nextProps;
+    const {
+      queryBuilder,
+      location: {search},
+      savedQuery,
+      isEditingSavedQuery,
+      params,
+    } = nextProps;
     const currentSearch = this.props.location.search;
     const {resultManager} = this.state;
 
@@ -96,7 +104,7 @@ export default class OrganizationDiscover extends React.Component {
     }
 
     // Clear data only if location.search is empty (reset has been called)
-    if (!search) {
+    if (!search && !params.savedQueryId) {
       const newQuery = getQueryFromQueryString(search);
       queryBuilder.reset(newQuery);
       resultManager.reset();
@@ -105,6 +113,21 @@ export default class OrganizationDiscover extends React.Component {
       });
     }
   }
+
+  updateProjects = val => {
+    this.updateField('projects', val);
+    updateProjects(val);
+  };
+
+  updateDateTime = ({relative, start, end}) => {
+    const datetimeFields = {
+      range: relative,
+      start: (start && getUtcDateString(start)) || start,
+      end: (end && getUtcDateString(end)) || end,
+    };
+    this.updateFields(datetimeFields);
+    updateDateTime(datetimeFields);
+  };
 
   updateField = (field, value) => {
     this.props.queryBuilder.updateField(field, value);
@@ -117,12 +140,9 @@ export default class OrganizationDiscover extends React.Component {
     });
   };
 
-  handleUpdateTime = ({relative, start, end}) => {
-    this.updateFields({
-      range: relative,
-      start: (start && getUtcDateString(start)) || start,
-      end: (end && getUtcDateString(end)) || end,
-    });
+  updateAndRunQuery = query => {
+    this.updateFields(query);
+    this.runQuery();
   };
 
   runQuery = () => {
@@ -261,7 +281,7 @@ export default class OrganizationDiscover extends React.Component {
   renderSidebarNav() {
     const {view} = this.state;
     const views = [
-      {id: 'query', title: t('New Query')},
+      {id: 'query', title: t('New query')},
       {id: 'saved', title: t('Saved queries')},
     ];
 
@@ -303,53 +323,6 @@ export default class OrganizationDiscover extends React.Component {
 
     return (
       <DiscoverContainer>
-        <DiscoverHeader>
-          <HeaderItemPosition>
-            <MultipleProjectSelector
-              value={currentQuery.projects}
-              organization={organization}
-              projects={projects}
-              onChange={val => this.updateField('projects', val)}
-              onUpdate={this.runQuery}
-            />
-          </HeaderItemPosition>
-          <HeaderSeparator />
-          <HeaderItemPosition>
-            <TimeRangeSelector
-              showAbsolute={true}
-              showRelative={true}
-              useUtc={true}
-              start={start}
-              end={end}
-              relative={currentQuery.range}
-              onChange={this.handleUpdateTime}
-              onUpdate={this.runQuery}
-            />
-          </HeaderItemPosition>
-          <HeaderSeparator />
-        </DiscoverHeader>
-        <Body>
-          <BodyContent>
-            {shouldDisplayResult && (
-              <Result
-                data={data}
-                savedQuery={savedQuery}
-                onToggleEdit={toggleEditMode}
-                onFetchPage={this.onFetchPage}
-              />
-            )}
-            {!shouldDisplayResult && (
-              <React.Fragment>
-                <Box mt={1} mb={2}>
-                  <Heading>{t('Discover')}</Heading>
-                </Box>
-                <Intro updateQuery={this.updateFields} />
-              </React.Fragment>
-            )}
-            {isFetchingQuery && <ResultLoading />}
-            <EarlyAdopterMessage />
-          </BodyContent>
-        </Body>
         <Sidebar>
           {this.renderSidebarNav()}
           {view === 'saved' && (
@@ -385,6 +358,56 @@ export default class OrganizationDiscover extends React.Component {
               </QueryPanel>
             )}
         </Sidebar>
+        <DiscoverHeader>
+          <HeaderItemPosition>
+            <MultipleProjectSelector
+              value={currentQuery.projects}
+              organization={organization}
+              projects={projects}
+              onChange={this.updateProjects}
+              onUpdate={this.runQuery}
+            />
+          </HeaderItemPosition>
+          <HeaderSeparator />
+          <HeaderItemPosition>
+            <TimeRangeSelector
+              showAbsolute={true}
+              showRelative={true}
+              useUtc={true}
+              start={start}
+              end={end}
+              relative={currentQuery.range}
+              onChange={this.updateDateTime}
+              onUpdate={this.runQuery}
+            />
+          </HeaderItemPosition>
+          <HeaderSeparator />
+        </DiscoverHeader>
+        <Body>
+          <BodyContent>
+            {shouldDisplayResult && (
+              <Result
+                data={data}
+                savedQuery={savedQuery}
+                onToggleEdit={toggleEditMode}
+                onFetchPage={this.onFetchPage}
+              />
+            )}
+            {!shouldDisplayResult && (
+              <React.Fragment>
+                <div>
+                  <HeadingContainer>
+                    <Heading>
+                      {t('Discover')} <BetaTag />
+                    </Heading>
+                  </HeadingContainer>
+                </div>
+                <Intro updateQuery={this.updateAndRunQuery} />
+              </React.Fragment>
+            )}
+            {isFetchingQuery && <ResultLoading />}
+          </BodyContent>
+        </Body>
       </DiscoverContainer>
     );
   }

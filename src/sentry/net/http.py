@@ -5,7 +5,7 @@ from socket import error as SocketError, timeout as SocketTimeout
 
 from requests import Session as _Session
 from requests.adapters import HTTPAdapter, DEFAULT_POOLBLOCK
-from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool, connection_from_url as _connection_from_url
 from urllib3.connection import HTTPConnection, HTTPSConnection
 from urllib3.exceptions import NewConnectionError, ConnectTimeoutError
 from urllib3.poolmanager import PoolManager
@@ -128,6 +128,21 @@ class BlacklistAdapter(HTTPAdapter):
             **pool_kwargs)
 
 
+class TimeoutAdapter(HTTPAdapter):
+
+    def __init__(self, *args, **kwargs):
+        timeout = kwargs.pop('timeout', None)
+        HTTPAdapter.__init__(self, *args, **kwargs)
+        if timeout is None:
+            timeout = 10.0
+        self.default_timeout = timeout
+
+    def send(self, *args, **kwargs):
+        if kwargs.get('timeout') is None:
+            kwargs['timeout'] = self.default_timeout
+        return HTTPAdapter.send(self, *args, **kwargs)
+
+
 USER_AGENT = u'sentry/{version} (https://sentry.io)'.format(
     version=SENTRY_VERSION,
 )
@@ -184,3 +199,9 @@ class UnixHTTPConnectionPool(HTTPConnectionPool):
     def __str__(self):
         return '%s(host=%r)' % (type(self).__name__,
                                 self.host)
+
+
+def connection_from_url(endpoint, **kw):
+    if endpoint[:1] == '/':
+        return UnixHTTPConnectionPool(endpoint, **kw)
+    return _connection_from_url(endpoint, **kw)

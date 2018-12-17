@@ -8,6 +8,8 @@ import styled from 'react-emotion';
 import {DEFAULT_STATS_PERIOD, DEFAULT_USE_UTC} from 'app/constants';
 import {defined} from 'app/utils';
 import {getLocalDateObject, getUtcDateString} from 'app/utils/dates';
+import {t} from 'app/locale';
+import BetaTag from 'app/components/betaTag';
 import Feature from 'app/components/acl/feature';
 import Header from 'app/components/organizations/header';
 import HeaderSeparator from 'app/components/organizations/headerSeparator';
@@ -17,8 +19,15 @@ import MultipleProjectSelector from 'app/components/organizations/multipleProjec
 import SentryTypes from 'app/sentryTypes';
 import TimeRangeSelector from 'app/components/organizations/timeRangeSelector';
 import space from 'app/styles/space';
+import {
+  updateProjects,
+  updateDateTime,
+  updateEnvironments,
+} from 'app/actionCreators/globalSelection';
+import withGlobalSelection from 'app/utils/withGlobalSelection';
 import withOrganization from 'app/utils/withOrganization';
 
+import SearchBar from './searchBar';
 import {getParams} from './utils/getParams';
 import EventsContext from './utils/eventsContext';
 
@@ -58,9 +67,11 @@ class OrganizationEventsContainer extends React.Component {
 
   static getStateFromRouter(props) {
     const {query} = props.router.location;
-    const hasAbsolute = !!query.start && !!query.end;
-    let project = [];
-    let environment = query.environment || [];
+    const hasAbsolute =
+      (!!query.start && !!query.end) ||
+      (!!props.selection.start && !!props.selection.end);
+    let project = props.selection.projects;
+    let environment = query.environment || props.selection.environments;
 
     if (defined(query.project) && Array.isArray(query.project)) {
       project = query.project.map(p => parseInt(p, 10));
@@ -73,7 +84,8 @@ class OrganizationEventsContainer extends React.Component {
       environment = [query.environment];
     }
 
-    let {start, end} = query;
+    let start = query.start || props.selection.start;
+    let end = query.end || props.selection.end;
 
     if (hasAbsolute) {
       start = getLocalDateObject(start);
@@ -83,12 +95,17 @@ class OrganizationEventsContainer extends React.Component {
     return {
       project,
       environment,
-      period: query.statsPeriod || (hasAbsolute ? null : DEFAULT_STATS_PERIOD),
+      period:
+        query.statsPeriod ||
+        props.selection.datetime.range ||
+        (hasAbsolute ? null : DEFAULT_STATS_PERIOD),
+      query: query.query || null,
       start: start || null,
       end: end || null,
 
       // params from URL will be a string
       utc: typeof query.utc !== 'undefined' ? query.utc === 'true' : DEFAULT_USE_UTC,
+      zoom: typeof query.zoom !== 'undefined' ? query.zoom === '1' : null,
     };
   }
 
@@ -113,6 +130,12 @@ class OrganizationEventsContainer extends React.Component {
       updateParams: this.updateParams,
     };
     this.state = {};
+  }
+
+  componentDidMount() {
+    this.handleUpdateProjects();
+    this.handleUpdateEnvironmments();
+    this.handleUpdatePeriod();
   }
 
   updateParams = obj => {
@@ -150,16 +173,23 @@ class OrganizationEventsContainer extends React.Component {
     this.setState({
       project: projects,
     });
+    updateProjects(projects);
   };
 
   handleChangeEnvironments = environments => {
     this.setState({
       environment: environments,
     });
+    updateEnvironments(environments);
   };
 
   handleChangeTime = ({start, end, relative, utc}) => {
     this.setState({start, end, period: relative, utc});
+    updateDateTime({
+      start,
+      end,
+      range: relative,
+    });
   };
 
   handleUpdatePeriod = () => {
@@ -167,13 +197,14 @@ class OrganizationEventsContainer extends React.Component {
     let newValueObj = {
       ...(defined(period) ? {period} : {start, end}),
       utc,
+      zoom: null,
     };
 
     this.updateParams(newValueObj);
   };
 
   handleUpdate = type => {
-    let newValueObj = {[type]: this.state[type]};
+    let newValueObj = {[type]: this.state[type], zoom: null};
     this.updateParams(newValueObj);
   };
 
@@ -181,19 +212,29 @@ class OrganizationEventsContainer extends React.Component {
 
   handleUpdateProjects = () => this.handleUpdate('project');
 
+  handleSearch = query => {
+    let {router, location} = this.props;
+    router.push({
+      pathname: location.pathname,
+      query: getParams({
+        ...(location.query || {}),
+        query,
+        zoom: null,
+      }),
+    });
+  };
+
   render() {
-    const {organization, children} = this.props;
+    const {organization, location, children} = this.props;
     const {period, start, end, utc} = this.state;
 
     const projects =
       organization.projects && organization.projects.filter(({isMember}) => isMember);
 
     return (
-      <Feature features={['global-views']} renderDisabled>
-        <EventsContext.Provider
-          value={{actions: this.actions, ...this.state.queryValues}}
-        >
-          <OrganizationEventsContent>
+      <EventsContext.Provider value={{actions: this.actions, ...this.state.queryValues}}>
+        <OrganizationEventsContent>
+          <Feature features={['global-views']} renderDisabled>
             <Header>
               <HeaderItemPosition>
                 <MultipleProjectSelector
@@ -227,14 +268,30 @@ class OrganizationEventsContainer extends React.Component {
                 />
               </HeaderItemPosition>
             </Header>
-            <Body>{children}</Body>
-          </OrganizationEventsContent>
-        </EventsContext.Provider>
-      </Feature>
+            <Body>
+              <Flex align="center" justify="space-between" mb={2}>
+                <HeaderTitle>
+                  {t('Events')} <BetaTag />
+                </HeaderTitle>
+                <StyledSearchBar
+                  organization={organization}
+                  query={(location.query && location.query.query) || ''}
+                  placeholder={t('Search for events, users, tags, and everything else.')}
+                  onSearch={this.handleSearch}
+                />
+              </Flex>
+
+              {children}
+            </Body>
+          </Feature>
+        </OrganizationEventsContent>
+      </EventsContext.Provider>
     );
   }
 }
-export default withRouter(withOrganization(OrganizationEventsContainer));
+export default withRouter(
+  withOrganization(withGlobalSelection(OrganizationEventsContainer))
+);
 export {OrganizationEventsContainer};
 
 const OrganizationEventsContent = styled(Flex)`
@@ -248,5 +305,18 @@ const Body = styled('div')`
   display: flex;
   flex-direction: column;
   flex: 1;
-  padding: ${space(3)} ${space(4)};
+  padding: ${space(2)} ${space(4)} ${space(3)};
+`;
+
+const HeaderTitle = styled('h4')`
+  flex: 1;
+  font-size: ${p => p.theme.headerFontSize};
+  line-height: ${p => p.theme.headerFontSize};
+  font-weight: normal;
+  color: ${p => p.theme.gray4};
+  margin: 0;
+`;
+
+const StyledSearchBar = styled(SearchBar)`
+  flex: 1;
 `;

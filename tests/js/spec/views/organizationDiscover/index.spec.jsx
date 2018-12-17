@@ -1,10 +1,15 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import {mount} from 'enzyme';
+import {browserHistory} from 'react-router';
 
-import OrganizationDiscoverContainer from 'app/views/organizationDiscover';
+import {OrganizationDiscoverContainer} from 'app/views/organizationDiscover';
 
 describe('OrganizationDiscoverContainer', function() {
+  beforeEach(function() {
+    browserHistory.push = jest.fn();
+  });
+
   afterEach(function() {
     MockApiClient.clearMockResponses();
   });
@@ -12,7 +17,7 @@ describe('OrganizationDiscoverContainer', function() {
   describe('new query', function() {
     let wrapper;
     const organization = TestStubs.Organization({
-      projects: [TestStubs.Project()],
+      projects: [TestStubs.Project({id: '1', slug: 'test-project'})],
       features: ['discover'],
     });
     beforeEach(async function() {
@@ -24,7 +29,11 @@ describe('OrganizationDiscoverContainer', function() {
         },
       });
       wrapper = mount(
-        <OrganizationDiscoverContainer location={{query: {}, search: ''}} params={{}} />,
+        <OrganizationDiscoverContainer
+          location={{query: {}, search: ''}}
+          params={{}}
+          selection={{datetime: {}}}
+        />,
         TestStubs.routerContext([{organization}])
       );
       await tick();
@@ -35,6 +44,22 @@ describe('OrganizationDiscoverContainer', function() {
       expect(wrapper.state().isLoading).toBe(false);
       expect(queryBuilder.getColumns().some(column => column.name === 'tag1')).toBe(true);
       expect(queryBuilder.getColumns().some(column => column.name === 'tag2')).toBe(true);
+    });
+
+    it('sets active projects from global selection', function() {
+      wrapper = mount(
+        <OrganizationDiscoverContainer
+          location={{query: {}, search: ''}}
+          params={{}}
+          selection={{
+            projects: [1],
+            environments: [],
+            datetime: {start: null, end: null, range: '14d'},
+          }}
+        />,
+        TestStubs.routerContext([{organization}])
+      );
+      expect(wrapper.find('MultipleProjectSelector').text()).toBe('test-project');
     });
   });
 
@@ -64,6 +89,7 @@ describe('OrganizationDiscoverContainer', function() {
         <OrganizationDiscoverContainer
           location={{query: {}, search: ''}}
           params={{savedQueryId: 1}}
+          selection={{datetime: {}}}
         />,
         {
           ...TestStubs.routerContext([{organization}, {organization: PropTypes.object}]),
@@ -93,13 +119,25 @@ describe('OrganizationDiscoverContainer', function() {
       expect(savedQueryMock).toHaveBeenCalledTimes(1);
       expect(nextQueryMock).toHaveBeenCalledTimes(1);
     });
+
+    it('toggles edit mode', function() {
+      wrapper.instance().toggleEditMode();
+      expect(browserHistory.push).toHaveBeenCalledWith({
+        pathname: '/organizations/org-slug/discover/saved/1/',
+        query: {editing: 'true'},
+      });
+    });
   });
 
   describe('no access', function() {
     it('display coming soon message', async function() {
       const organization = TestStubs.Organization({projects: [TestStubs.Project()]});
       const wrapper = mount(
-        <OrganizationDiscoverContainer location={{query: {}, search: ''}} params={{}} />,
+        <OrganizationDiscoverContainer
+          location={{query: {}, search: ''}}
+          params={{}}
+          selection={{datetime: {}}}
+        />,
         TestStubs.routerContext([{organization}])
       );
       expect(wrapper.text()).toBe('something is happening here soon :)');

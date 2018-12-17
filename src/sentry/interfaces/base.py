@@ -1,16 +1,22 @@
 from __future__ import absolute_import
 
+from collections import Mapping, OrderedDict
+import logging
 import six
-from collections import OrderedDict
 
 from django.conf import settings
 from django.utils.translation import ugettext as _
 
+from sentry.models.eventerror import EventError
 from sentry.utils.canonical import get_canonical_name
 from sentry.utils.html import escape
 from sentry.utils.imports import import_string
 from sentry.utils.safe import safe_execute
 from sentry.utils.decorators import classproperty
+
+
+logger = logging.getLogger("sentry.events")
+interface_logger = logging.getLogger("sentry.interfaces")
 
 
 def get_interface(name):
@@ -47,6 +53,23 @@ def get_interfaces(data):
     return OrderedDict(
         (k, v) for k, v in sorted(result, key=lambda x: x[1].get_score(), reverse=True)
     )
+
+
+def prune_empty_keys(obj):
+    if obj is None:
+        return None
+
+    # eliminate None values for serialization to compress the keyspace
+    # and save (seriously) ridiculous amounts of bytes
+    #
+    # Do not coerce empty arrays/dicts or other "falsy" values here to None,
+    # but rather deal with them case-by-case before calling `prune_empty_keys`
+    # (e.g. in `Interface.to_json`). Rarely, but sometimes, there's a slight
+    # semantic difference between empty containers and a missing value. One
+    # example would be `event.logenty.formatted`, where `{}` means "this
+    # message has no params" and `None` means "this message is already
+    # formatted".
+    return dict((k, v) for k, v in six.iteritems(obj) if v is not None)
 
 
 class InterfaceValidationError(Exception):
@@ -103,7 +126,66 @@ class Interface(object):
 
     @classmethod
     def to_python(cls, data):
-        return cls(**data)
+        """Creates a python interface object from the given raw data.
+
+        This function can assume fully normalized and valid data. It can create
+        defaults where data is missing but does not need to handle interface
+        validation.
+        """
+        return cls(**data) if data is not None else None
+
+    @classmethod
+    def _normalize(cls, data, meta):
+        """Custom interface normalization. ``data`` is guaranteed to be a
+        non-empty mapping. Return ``None`` for invalid data.
+        """
+        return cls.to_python(data).to_json()
+
+    @classmethod
+    def normalize(cls, data, meta):
+        """Normalizes the given raw data removing or replacing all invalid
+        attributes. If the interface is unprocessable, ``None`` is returned
+        instead.
+
+        Errors are written to the ``meta`` container. Use ``Meta.enter(key)`` to
+        obtain an instance.
+
+        TEMPORARY: The transitional default behavior is to call to_python and
+        catch exceptions into meta data. To migrate, override ``_normalize``.
+        """
+
+        # Gracefully skip empty data. We treat ``None`` and empty objects the
+        # same as missing data. If there are meta errors attached already, they
+        # will remain in meta.
+        if not data:
+            return None
+
+        # Interface data is required to be a JSON object. Places where the
+        # protocol permits lists must be casted to a values wrapper first.
+        if not isinstance(data, Mapping):
+            meta.add_error(EventError.INVALID_DATA, data, {
+                'reason': 'expected %s' % (cls.__name__,),
+            })
+            return None
+
+        try:
+            data = cls._normalize(data, meta=meta)
+        except Exception as e:
+            # XXX: InterfaceValidationErrors can be thrown in the transitional
+            # phase while to_python is being used for normalization. All other
+            # exceptions indicate a programming error and need to be reported.
+            if not isinstance(e, InterfaceValidationError):
+                interface_logger.error('Discarded invalid value for interface: %s (%r)',
+                             cls.path, data, exc_info=True)
+
+            meta.add_error(EventError.INVALID_DATA, data, {
+                'reason': six.text_type(e)
+            })
+            return None
+
+        # As with input data, empty interface data is coerced to None after
+        # normalization.
+        return data or None
 
     def get_api_context(self, is_public=False):
         return self.to_json()
@@ -112,11 +194,7 @@ class Interface(object):
         return meta
 
     def to_json(self):
-        # eliminate empty values for serialization to compress the keyspace
-        # and save (seriously) ridiculous amounts of bytes
-        # XXX(dcramer): its important that we keep zero values here, but empty
-        # lists and strings get discarded as we've deemed them not important
-        return dict((k, v) for k, v in six.iteritems(self._data) if (v == 0 or v))
+        return prune_empty_keys(self._data)
 
     def get_hash(self):
         return []

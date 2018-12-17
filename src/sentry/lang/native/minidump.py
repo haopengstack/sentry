@@ -1,8 +1,9 @@
 from __future__ import absolute_import
 
 from django.core.files.uploadedfile import InMemoryUploadedFile, TemporaryUploadedFile
-
 from symbolic import arch_from_breakpad, ProcessState, id_from_breakpad
+
+from sentry.utils.safe import get_path
 
 # Attachment type used for minidump files
 MINIDUMP_ATTACHMENT_TYPE = 'event.minidump'
@@ -15,11 +16,8 @@ MINIDUMP_OS_TYPES = {
 
 
 def is_minidump_event(data):
-    exceptions = (data.get('exception') or {}).get('values') or []
-    if not exceptions:
-        return False
-
-    return (exceptions[0].get('mechanism') or {}).get('type') == 'minidump'
+    exceptions = get_path(data, 'exception', 'values', filter=True)
+    return get_path(exceptions, 0, 'mechanism', 'type') == 'minidump'
 
 
 def process_minidump(minidump, cfi=None):
@@ -93,8 +91,12 @@ def merge_process_state_event(data, state, cfi=None):
         'image_addr': '0x%x' % module.addr,
         'image_size': module.size,
         'name': module.name,
-    } for module in state.modules()]
+    } for module in state.modules() if is_valid_module_id(module.id)]
     data.setdefault('debug_meta', {})['images'] = images
+
+
+def is_valid_module_id(id):
+    return id is not None and id != '000000000000000000000000000000000'
 
 
 def frames_from_minidump_thread(thread):
